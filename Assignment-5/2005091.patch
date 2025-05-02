@@ -1,0 +1,1562 @@
+diff --git a/LICENSE b/LICENSE
+index 1ace9a3..44b6b84 100644
+--- a/LICENSE
++++ b/LICENSE
+@@ -21,4 +21,3 @@ NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+ LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+-
+diff --git a/Makefile b/Makefile
+index 62fd0f8..5699594 100644
+--- a/Makefile
++++ b/Makefile
+@@ -32,7 +32,7 @@ OBJS = \
+ 
+ # riscv64-unknown-elf- or riscv64-linux-gnu-
+ # perhaps in /opt/riscv/bin
+-#TOOLPREFIX = 
++#TOOLPREFIX =
+ 
+ # Try to infer the correct TOOLPREFIX if not set
+ ifndef TOOLPREFIX
+@@ -81,7 +81,7 @@ endif
+ LDFLAGS = -z max-page-size=4096
+ 
+ $K/kernel: $(OBJS) $K/kernel.ld $U/initcode
+-	$(LD) $(LDFLAGS) -T $K/kernel.ld -o $K/kernel $(OBJS) 
++	$(LD) $(LDFLAGS) -T $K/kernel.ld -o $K/kernel $(OBJS)
+ 	$(OBJDUMP) -S $K/kernel > $K/kernel.asm
+ 	$(OBJDUMP) -t $K/kernel | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $K/kernel.sym
+ 
+@@ -139,13 +139,14 @@ UPROGS=\
+ 	$U/_grind\
+ 	$U/_wc\
+ 	$U/_zombie\
++	$U/_threads\
+ 
+ fs.img: mkfs/mkfs README $(UPROGS)
+ 	mkfs/mkfs fs.img README $(UPROGS)
+ 
+ -include kernel/*.d user/*.d
+ 
+-clean: 
++clean:
+ 	rm -f *.tex *.dvi *.idx *.aux *.log *.ind *.ilg \
+ 	*/*.o */*.d */*.asm */*.sym \
+ 	$U/initcode $U/initcode.out $K/kernel fs.img \
+@@ -177,4 +178,3 @@ qemu: $K/kernel fs.img
+ qemu-gdb: $K/kernel .gdbinit fs.img
+ 	@echo "*** Now run 'gdb' in another window." 1>&2
+ 	$(QEMU) $(QEMUOPTS) -S $(QEMUGDB)
+-
+diff --git a/kernel/bio.c b/kernel/bio.c
+index 60d91a6..5207569 100644
+--- a/kernel/bio.c
++++ b/kernel/bio.c
+@@ -132,7 +132,7 @@ brelse(struct buf *b)
+     bcache.head.next->prev = b;
+     bcache.head.next = b;
+   }
+-  
++
+   release(&bcache.lock);
+ }
+ 
+@@ -149,5 +149,3 @@ bunpin(struct buf *b) {
+   b->refcnt--;
+   release(&bcache.lock);
+ }
+-
+-
+diff --git a/kernel/buf.h b/kernel/buf.h
+index 4616e9e..aafabea 100644
+--- a/kernel/buf.h
++++ b/kernel/buf.h
+@@ -9,4 +9,3 @@ struct buf {
+   struct buf *next;
+   uchar data[BSIZE];
+ };
+-
+diff --git a/kernel/console.c b/kernel/console.c
+index 05dc526..cb3fdc3 100644
+--- a/kernel/console.c
++++ b/kernel/console.c
+@@ -43,7 +43,7 @@ consputc(int c)
+ 
+ struct {
+   struct spinlock lock;
+-  
++
+   // input
+ #define INPUT_BUF_SIZE 128
+   char buf[INPUT_BUF_SIZE];
+@@ -174,7 +174,7 @@ consoleintr(int c)
+     }
+     break;
+   }
+-  
++
+   release(&cons.lock);
+ }
+ 
+diff --git a/kernel/defs.h b/kernel/defs.h
+index d1b6bb9..a7d3233 100644
+--- a/kernel/defs.h
++++ b/kernel/defs.h
+@@ -9,6 +9,12 @@ struct sleeplock;
+ struct stat;
+ struct superblock;
+ 
++int             thread_create(uint64 fcn,uint64 arg,uint64 stack);
++int             thread_join(int thread_id);
++int             thread_exit(void);
++int             uvmmirror(pagetable_t, pagetable_t, uint64);
++
++
+ // bio.c
+ void            binit(void);
+ struct buf*     bread(uint, uint);
+diff --git a/kernel/exec.c b/kernel/exec.c
+index e18bbb6..794a10d 100644
+--- a/kernel/exec.c
++++ b/kernel/exec.c
+@@ -119,7 +119,7 @@ exec(char *path, char **argv)
+     if(*s == '/')
+       last = s+1;
+   safestrcpy(p->name, last, sizeof(p->name));
+-    
++
+   // Commit to the user image.
+   oldpagetable = p->pagetable;
+   p->pagetable = pagetable;
+@@ -161,6 +161,6 @@ loadseg(pagetable_t pagetable, uint64 va, struct inode *ip, uint offset, uint sz
+     if(readi(ip, 0, (uint64)pa, offset+i, n) != n)
+       return -1;
+   }
+-  
++
+   return 0;
+ }
+diff --git a/kernel/file.c b/kernel/file.c
+index 25fa226..6968af5 100644
+--- a/kernel/file.c
++++ b/kernel/file.c
+@@ -89,7 +89,7 @@ filestat(struct file *f, uint64 addr)
+ {
+   struct proc *p = myproc();
+   struct stat st;
+-  
++
+   if(f->type == FD_INODE || f->type == FD_DEVICE){
+     ilock(f->ip);
+     stati(f->ip, &st);
+@@ -179,4 +179,3 @@ filewrite(struct file *f, uint64 addr, int n)
+ 
+   return ret;
+ }
+-
+diff --git a/kernel/fs.c b/kernel/fs.c
+index c6bab15..e73bb50 100644
+--- a/kernel/fs.c
++++ b/kernel/fs.c
+@@ -24,7 +24,7 @@
+ #define min(a, b) ((a) < (b) ? (a) : (b))
+ // there should be one superblock per disk device, but we run with
+ // only one device
+-struct superblock sb; 
++struct superblock sb;
+ 
+ // Read the super block.
+ static void
+@@ -182,7 +182,7 @@ void
+ iinit()
+ {
+   int i = 0;
+-  
++
+   initlock(&itable.lock, "itable");
+   for(i = 0; i < NINODE; i++) {
+     initsleeplock(&itable.inode[i].lock, "inode");
+diff --git a/kernel/fs.h b/kernel/fs.h
+index 139dcc9..365b0ef 100644
+--- a/kernel/fs.h
++++ b/kernel/fs.h
+@@ -57,4 +57,3 @@ struct dirent {
+   ushort inum;
+   char name[DIRSIZ];
+ };
+-
+diff --git a/kernel/kernelvec.S b/kernel/kernelvec.S
+index a18ecbb..c47a047 100644
+--- a/kernel/kernelvec.S
++++ b/kernel/kernelvec.S
+@@ -73,7 +73,7 @@ timervec:
+         # scratch[0,8,16] : register save area.
+         # scratch[24] : address of CLINT's MTIMECMP register.
+         # scratch[32] : desired interval between interrupts.
+-        
++
+         csrrw a0, mscratch, a0
+         sd a1, 0(a0)
+         sd a2, 8(a0)
+diff --git a/kernel/log.c b/kernel/log.c
+index 5b58306..67aa855 100644
+--- a/kernel/log.c
++++ b/kernel/log.c
+@@ -233,4 +233,3 @@ log_write(struct buf *b)
+   }
+   release(&log.lock);
+ }
+-
+diff --git a/kernel/main.c b/kernel/main.c
+index f0d3171..184fa96 100644
+--- a/kernel/main.c
++++ b/kernel/main.c
+@@ -41,5 +41,5 @@ main()
+     plicinithart();   // ask PLIC for device interrupts
+   }
+ 
+-  scheduler();        
++  scheduler();
+ }
+diff --git a/kernel/memlayout.h b/kernel/memlayout.h
+index cac3cb1..c43131e 100644
+--- a/kernel/memlayout.h
++++ b/kernel/memlayout.h
+@@ -6,8 +6,8 @@
+ // 00001000 -- boot ROM, provided by qemu
+ // 02000000 -- CLINT
+ // 0C000000 -- PLIC
+-// 10000000 -- uart0 
+-// 10001000 -- virtio disk 
++// 10000000 -- uart0
++// 10001000 -- virtio disk
+ // 80000000 -- boot ROM jumps here in machine mode
+ //             -kernel loads the kernel here
+ // unused RAM after 80000000.
+diff --git a/kernel/plic.c b/kernel/plic.c
+index 4175db9..84d60ed 100644
+--- a/kernel/plic.c
++++ b/kernel/plic.c
+@@ -20,7 +20,7 @@ void
+ plicinithart(void)
+ {
+   int hart = cpuid();
+-  
++
+   // set enable bits for this hart's S-mode
+   // for the uart and virtio disk.
+   *(uint32*)PLIC_SENABLE(hart) = (1 << UART0_IRQ) | (1 << VIRTIO0_IRQ);
+diff --git a/kernel/proc.c b/kernel/proc.c
+index 58a8a0b..56ce497 100644
+--- a/kernel/proc.c
++++ b/kernel/proc.c
+@@ -33,7 +33,7 @@ void
+ proc_mapstacks(pagetable_t kpgtbl)
+ {
+   struct proc *p;
+-  
++
+   for(p = proc; p < &proc[NPROC]; p++) {
+     char *pa = kalloc();
+     if(pa == 0)
+@@ -48,7 +48,7 @@ void
+ procinit(void)
+ {
+   struct proc *p;
+-  
++
+   initlock(&pid_lock, "nextpid");
+   initlock(&wait_lock, "wait_lock");
+   for(p = proc; p < &proc[NPROC]; p++) {
+@@ -93,7 +93,7 @@ int
+ allocpid()
+ {
+   int pid;
+-  
++
+   acquire(&pid_lock);
+   pid = nextpid;
+   nextpid = nextpid + 1;
+@@ -158,7 +158,7 @@ freeproc(struct proc *p)
+   if(p->trapframe)
+     kfree((void*)p->trapframe);
+   p->trapframe = 0;
+-  if(p->pagetable)
++  if(p->pagetable && p->is_thread==0)
+     proc_freepagetable(p->pagetable, p->sz);
+   p->pagetable = 0;
+   p->sz = 0;
+@@ -236,7 +236,7 @@ userinit(void)
+ 
+   p = allocproc();
+   initproc = p;
+-  
++
+   // allocate one user page and copy initcode's instructions
+   // and data into it.
+   uvmfirst(p->pagetable, initcode, sizeof(initcode));
+@@ -372,7 +372,7 @@ exit(int status)
+ 
+   // Parent might be sleeping in wait().
+   wakeup(p->parent);
+-  
++
+   acquire(&p->lock);
+ 
+   p->xstate = status;
+@@ -428,7 +428,7 @@ wait(uint64 addr)
+       release(&wait_lock);
+       return -1;
+     }
+-    
++
+     // Wait for a child to exit.
+     sleep(p, &wait_lock);  //DOC: wait-sleep
+   }
+@@ -541,7 +541,7 @@ void
+ sleep(void *chan, struct spinlock *lk)
+ {
+   struct proc *p = myproc();
+-  
++
+   // Must acquire p->lock in order to
+   // change p->state and then call sched.
+   // Once we hold p->lock, we can be
+@@ -620,7 +620,7 @@ int
+ killed(struct proc *p)
+ {
+   int k;
+-  
++
+   acquire(&p->lock);
+   k = p->killed;
+   release(&p->lock);
+@@ -686,3 +686,108 @@ procdump(void)
+     printf("\n");
+   }
+ }
++
++int
++thread_create(uint64 fcn,uint64 arg,uint64 stack){
++  int i, pid;
++  struct proc *np;
++  struct proc *p = myproc();
++
++  // Allocate process.
++  if((np = allocproc()) == 0){
++    return -1;
++  }
++
++  // Copy user memory from parent to child.
++  if(uvmmirror(p->pagetable, np->pagetable, p->sz) < 0){
++    freeproc(np);
++    release(&np->lock);
++    return -1;
++  }
++  np->sz = p->sz;
++
++  // copy saved user registers.
++  *(np->trapframe) = *(p->trapframe);
++
++  // Cause fork to return 0 in the child.
++  // np->trapframe->a0 = 0;
++  np->trapframe->epc=fcn;
++  np->trapframe->sp=stack+PGSIZE;
++  np->trapframe->a0=arg;
++  np->trapframe->ra=0xffffffff;
++  np->is_thread=1;
++
++  // increment reference counts on open file descriptors.
++  for(i = 0; i < NOFILE; i++)
++    if(p->ofile[i])
++      np->ofile[i] = filedup(p->ofile[i]);
++  np->cwd = idup(p->cwd);
++
++  safestrcpy(np->name, p->name, sizeof(p->name));
++
++  pid = np->pid;
++
++  release(&np->lock);
++
++  acquire(&wait_lock);
++  np->parent = p;
++  release(&wait_lock);
++
++  acquire(&np->lock);
++  np->state = RUNNABLE;
++  release(&np->lock);
++
++  return pid;
++}
++
++int
++thread_join(int addr)
++{
++  struct proc *pp;
++  int havekids, pid;
++  struct proc *p = myproc();
++
++  acquire(&wait_lock);
++
++  for(;;){
++    // Scan through table looking for exited children.
++    havekids = 0;
++    for(pp = proc; pp < &proc[NPROC]; pp++){
++      if(pp->parent == p){
++        // make sure the child isn't still in exit() or swtch().
++        acquire(&pp->lock);
++
++        havekids = 1;
++        if(pp->state == ZOMBIE && pp->is_thread==1 && pp->pid==addr){
++          // Found one.
++          pid = pp->pid;
++          if(addr != 0 && copyout(p->pagetable, addr, (char *)&pp->xstate,
++                                  sizeof(pp->xstate)) < 0) {
++            release(&pp->lock);
++            release(&wait_lock);
++            return -1;
++          }
++          freeproc(pp);
++          release(&pp->lock);
++          release(&wait_lock);
++          return pid;
++        }
++        release(&pp->lock);
++      }
++    }
++
++    // No point waiting if we don't have any children.
++    if(!havekids || killed(p)){
++      release(&wait_lock);
++      return -1;
++    }
++
++    // Wait for a child to exit.
++    sleep(p, &wait_lock);  //DOC: wait-sleep
++  }
++}
++
++int thread_exit(){
++  exit(0);
++  return 0;
++}
+\ No newline at end of file
+diff --git a/kernel/proc.h b/kernel/proc.h
+index d021857..7085444 100644
+--- a/kernel/proc.h
++++ b/kernel/proc.h
+@@ -91,6 +91,7 @@ struct proc {
+   int killed;                  // If non-zero, have been killed
+   int xstate;                  // Exit status to be returned to parent's wait
+   int pid;                     // Process ID
++  int is_thread;
+ 
+   // wait_lock must be held when using this:
+   struct proc *parent;         // Parent process
+diff --git a/kernel/riscv.h b/kernel/riscv.h
+index 20a01db..52eafba 100644
+--- a/kernel/riscv.h
++++ b/kernel/riscv.h
+@@ -25,7 +25,7 @@ r_mstatus()
+   return x;
+ }
+ 
+-static inline void 
++static inline void
+ w_mstatus(uint64 x)
+ {
+   asm volatile("csrw mstatus, %0" : : "r" (x));
+@@ -34,7 +34,7 @@ w_mstatus(uint64 x)
+ // machine exception program counter, holds the
+ // instruction address to which a return from
+ // exception will go.
+-static inline void 
++static inline void
+ w_mepc(uint64 x)
+ {
+   asm volatile("csrw mepc, %0" : : "r" (x));
+@@ -56,7 +56,7 @@ r_sstatus()
+   return x;
+ }
+ 
+-static inline void 
++static inline void
+ w_sstatus(uint64 x)
+ {
+   asm volatile("csrw sstatus, %0" : : "r" (x));
+@@ -71,7 +71,7 @@ r_sip()
+   return x;
+ }
+ 
+-static inline void 
++static inline void
+ w_sip(uint64 x)
+ {
+   asm volatile("csrw sip, %0" : : "r" (x));
+@@ -89,7 +89,7 @@ r_sie()
+   return x;
+ }
+ 
+-static inline void 
++static inline void
+ w_sie(uint64 x)
+ {
+   asm volatile("csrw sie, %0" : : "r" (x));
+@@ -107,7 +107,7 @@ r_mie()
+   return x;
+ }
+ 
+-static inline void 
++static inline void
+ w_mie(uint64 x)
+ {
+   asm volatile("csrw mie, %0" : : "r" (x));
+@@ -116,7 +116,7 @@ w_mie(uint64 x)
+ // supervisor exception program counter, holds the
+ // instruction address to which a return from
+ // exception will go.
+-static inline void 
++static inline void
+ w_sepc(uint64 x)
+ {
+   asm volatile("csrw sepc, %0" : : "r" (x));
+@@ -139,7 +139,7 @@ r_medeleg()
+   return x;
+ }
+ 
+-static inline void 
++static inline void
+ w_medeleg(uint64 x)
+ {
+   asm volatile("csrw medeleg, %0" : : "r" (x));
+@@ -154,7 +154,7 @@ r_mideleg()
+   return x;
+ }
+ 
+-static inline void 
++static inline void
+ w_mideleg(uint64 x)
+ {
+   asm volatile("csrw mideleg, %0" : : "r" (x));
+@@ -162,7 +162,7 @@ w_mideleg(uint64 x)
+ 
+ // Supervisor Trap-Vector Base Address
+ // low two bits are mode.
+-static inline void 
++static inline void
+ w_stvec(uint64 x)
+ {
+   asm volatile("csrw stvec, %0" : : "r" (x));
+@@ -177,7 +177,7 @@ r_stvec()
+ }
+ 
+ // Machine-mode interrupt vector
+-static inline void 
++static inline void
+ w_mtvec(uint64 x)
+ {
+   asm volatile("csrw mtvec, %0" : : "r" (x));
+@@ -203,7 +203,7 @@ w_pmpaddr0(uint64 x)
+ 
+ // supervisor address translation and protection;
+ // holds the address of the page table.
+-static inline void 
++static inline void
+ w_satp(uint64 x)
+ {
+   asm volatile("csrw satp, %0" : : "r" (x));
+@@ -217,7 +217,7 @@ r_satp()
+   return x;
+ }
+ 
+-static inline void 
++static inline void
+ w_mscratch(uint64 x)
+ {
+   asm volatile("csrw mscratch, %0" : : "r" (x));
+@@ -242,7 +242,7 @@ r_stval()
+ }
+ 
+ // Machine-mode Counter-Enable
+-static inline void 
++static inline void
+ w_mcounteren(uint64 x)
+ {
+   asm volatile("csrw mcounteren, %0" : : "r" (x));
+@@ -305,7 +305,7 @@ r_tp()
+   return x;
+ }
+ 
+-static inline void 
++static inline void
+ w_tp(uint64 x)
+ {
+   asm volatile("mv tp, %0" : : "r" (x));
+diff --git a/kernel/sleeplock.c b/kernel/sleeplock.c
+index 81de585..a45911e 100644
+--- a/kernel/sleeplock.c
++++ b/kernel/sleeplock.c
+@@ -44,12 +44,9 @@ int
+ holdingsleep(struct sleeplock *lk)
+ {
+   int r;
+-  
++
+   acquire(&lk->lk);
+   r = lk->locked && (lk->pid == myproc()->pid);
+   release(&lk->lk);
+   return r;
+ }
+-
+-
+-
+diff --git a/kernel/sleeplock.h b/kernel/sleeplock.h
+index 110e6f3..e389e34 100644
+--- a/kernel/sleeplock.h
++++ b/kernel/sleeplock.h
+@@ -2,9 +2,8 @@
+ struct sleeplock {
+   uint locked;       // Is the lock held?
+   struct spinlock lk; // spinlock protecting this sleep lock
+-  
++
+   // For debugging:
+   char *name;        // Name of lock.
+   int pid;           // Process holding lock
+ };
+-
+diff --git a/kernel/spinlock.h b/kernel/spinlock.h
+index 4392820..f8c92cc 100644
+--- a/kernel/spinlock.h
++++ b/kernel/spinlock.h
+@@ -6,4 +6,3 @@ struct spinlock {
+   char *name;        // Name of lock.
+   struct cpu *cpu;   // The cpu holding the lock.
+ };
+-
+diff --git a/kernel/string.c b/kernel/string.c
+index 153536f..f4f0385 100644
+--- a/kernel/string.c
++++ b/kernel/string.c
+@@ -35,7 +35,7 @@ memmove(void *dst, const void *src, uint n)
+ 
+   if(n == 0)
+     return dst;
+-  
++
+   s = src;
+   d = dst;
+   if(s < d && s + n > d){
+@@ -104,4 +104,3 @@ strlen(const char *s)
+     ;
+   return n;
+ }
+-
+diff --git a/kernel/swtch.S b/kernel/swtch.S
+index 17a8663..7f97d33 100644
+--- a/kernel/swtch.S
++++ b/kernel/swtch.S
+@@ -1,8 +1,8 @@
+ # Context switch
+ #
+ #   void swtch(struct context *old, struct context *new);
+-# 
+-# Save current registers in old. Load from new.	
++#
++# Save current registers in old. Load from new.
+ 
+ 
+ .globl swtch
+@@ -36,7 +36,5 @@ swtch:
+         ld s9, 88(a1)
+         ld s10, 96(a1)
+         ld s11, 104(a1)
+-        
+-        ret
+ 
+-	
++        ret
+diff --git a/kernel/syscall.c b/kernel/syscall.c
+index ed65409..d687ffd 100644
+--- a/kernel/syscall.c
++++ b/kernel/syscall.c
+@@ -101,6 +101,9 @@ extern uint64 sys_unlink(void);
+ extern uint64 sys_link(void);
+ extern uint64 sys_mkdir(void);
+ extern uint64 sys_close(void);
++extern uint64 sys_thread_create(void);
++extern uint64 sys_thread_join(void);
++extern uint64 sys_thread_exit(void);
+ 
+ // An array mapping syscall numbers from syscall.h
+ // to the function that handles the system call.
+@@ -126,6 +129,9 @@ static uint64 (*syscalls[])(void) = {
+ [SYS_link]    sys_link,
+ [SYS_mkdir]   sys_mkdir,
+ [SYS_close]   sys_close,
++[SYS_thread_create] sys_thread_create,
++[SYS_thread_join] sys_thread_join,
++[SYS_thread_exit] sys_thread_exit,
+ };
+ 
+ void
+diff --git a/kernel/syscall.h b/kernel/syscall.h
+index bc5f356..b6abf3a 100644
+--- a/kernel/syscall.h
++++ b/kernel/syscall.h
+@@ -20,3 +20,6 @@
+ #define SYS_link   19
+ #define SYS_mkdir  20
+ #define SYS_close  21
++#define SYS_thread_create 22
++#define SYS_thread_join 23
++#define SYS_thread_exit 24
+diff --git a/kernel/sysfile.c b/kernel/sysfile.c
+index 16b668c..12b0468 100644
+--- a/kernel/sysfile.c
++++ b/kernel/sysfile.c
+@@ -85,7 +85,7 @@ sys_write(void)
+   struct file *f;
+   int n;
+   uint64 p;
+-  
++
+   argaddr(1, &p);
+   argint(2, &n);
+   if(argfd(0, 0, &f) < 0)
+@@ -412,7 +412,7 @@ sys_chdir(void)
+   char path[MAXPATH];
+   struct inode *ip;
+   struct proc *p = myproc();
+-  
++
+   begin_op();
+   if(argstr(0, path, MAXPATH) < 0 || (ip = namei(path)) == 0){
+     end_op();
+diff --git a/kernel/sysproc.c b/kernel/sysproc.c
+index 3b4d5bd..2a9ad0b 100644
+--- a/kernel/sysproc.c
++++ b/kernel/sysproc.c
+@@ -91,3 +91,29 @@ sys_uptime(void)
+   release(&tickslock);
+   return xticks;
+ }
++
++uint64
++sys_thread_create(void)
++{
++  uint64 fcn;
++  argaddr(0,&fcn);
++  uint64 arg;
++  argaddr(1,&arg);
++  uint64 stack;
++  argaddr(2,&stack);
++  return thread_create(fcn,arg,stack);
++}
++
++uint64
++sys_thread_join(void)
++{
++  int id_;
++  argint(0,&id_);
++  return thread_join(id_);
++}
++
++uint64
++sys_thread_exit(void)
++{
++  return thread_exit();
++}
+\ No newline at end of file
+diff --git a/kernel/trampoline.S b/kernel/trampoline.S
+index 693f8a1..76fb881 100644
+--- a/kernel/trampoline.S
++++ b/kernel/trampoline.S
+@@ -6,7 +6,7 @@
+         # at the same virtual address (TRAMPOLINE)
+         # in user and kernel space so that it continues
+         # to work when it switches page tables.
+-        # kernel.ld causes this code to start at 
++        # kernel.ld causes this code to start at
+         # a page boundary.
+         #
+ 
+@@ -19,7 +19,7 @@
+ trampoline:
+ .align 4
+ .globl uservec
+-uservec:    
++uservec:
+ 	#
+         # trap.c sets stvec to point here, so
+         # traps from user space start here,
+@@ -35,7 +35,7 @@ uservec:
+         # but it's mapped to the same virtual address
+         # (TRAPFRAME) in every process's user page table.
+         li a0, TRAPFRAME
+-        
++
+         # save the user registers in TRAPFRAME
+         sd ra, 40(a0)
+         sd sp, 48(a0)
+@@ -145,7 +145,7 @@ userret:
+ 
+ 	# restore user a0
+         ld a0, 112(a0)
+-        
++
+         # return to user mode and user pc.
+         # usertrapret() set up sstatus and sepc.
+         sret
+diff --git a/kernel/trap.c b/kernel/trap.c
+index f21fa26..c325b27 100644
+--- a/kernel/trap.c
++++ b/kernel/trap.c
+@@ -46,10 +46,10 @@ usertrap(void)
+   w_stvec((uint64)kernelvec);
+ 
+   struct proc *p = myproc();
+-  
++
+   // save user program counter.
+   p->trapframe->epc = r_sepc();
+-  
++
+   if(r_scause() == 8){
+     // system call
+ 
+@@ -109,7 +109,7 @@ usertrapret(void)
+ 
+   // set up the registers that trampoline.S's sret will use
+   // to get to user space.
+-  
++
+   // set S Previous Privilege mode to User.
+   unsigned long x = r_sstatus();
+   x &= ~SSTATUS_SPP; // clear SPP to 0 for user mode
+@@ -122,7 +122,7 @@ usertrapret(void)
+   // tell trampoline.S the user page table to switch to.
+   uint64 satp = MAKE_SATP(p->pagetable);
+ 
+-  // jump to userret in trampoline.S at the top of memory, which 
++  // jump to userret in trampoline.S at the top of memory, which
+   // switches to the user page table, restores user registers,
+   // and switches to user mode with sret.
+   uint64 trampoline_userret = TRAMPOLINE + (userret - trampoline);
+@@ -131,14 +131,14 @@ usertrapret(void)
+ 
+ // interrupts and exceptions from kernel code go here via kernelvec,
+ // on whatever the current kernel stack is.
+-void 
++void
+ kerneltrap()
+ {
+   int which_dev = 0;
+   uint64 sepc = r_sepc();
+   uint64 sstatus = r_sstatus();
+   uint64 scause = r_scause();
+-  
++
+   if((sstatus & SSTATUS_SPP) == 0)
+     panic("kerneltrap: not from supervisor mode");
+   if(intr_get() != 0)
+@@ -208,7 +208,7 @@ devintr()
+     if(cpuid() == 0){
+       clockintr();
+     }
+-    
++
+     // acknowledge the software interrupt by clearing
+     // the SSIP bit in sip.
+     w_sip(r_sip() & ~2);
+@@ -218,4 +218,3 @@ devintr()
+     return 0;
+   }
+ }
+-
+diff --git a/kernel/uart.c b/kernel/uart.c
+index e3b3b8a..3843054 100644
+--- a/kernel/uart.c
++++ b/kernel/uart.c
+@@ -104,7 +104,7 @@ uartputc(int c)
+ }
+ 
+ 
+-// alternate version of uartputc() that doesn't 
++// alternate version of uartputc() that doesn't
+ // use interrupts, for use by kernel printf() and
+ // to echo characters. it spins waiting for the uart's
+ // output register to be empty.
+@@ -138,20 +138,20 @@ uartstart()
+       // transmit buffer is empty.
+       return;
+     }
+-    
++
+     if((ReadReg(LSR) & LSR_TX_IDLE) == 0){
+       // the UART transmit holding register is full,
+       // so we cannot give it another byte.
+       // it will interrupt when it's ready for a new byte.
+       return;
+     }
+-    
++
+     int c = uart_tx_buf[uart_tx_r % UART_TX_BUF_SIZE];
+     uart_tx_r += 1;
+-    
++
+     // maybe uartputc() is waiting for space in the buffer.
+     wakeup(&uart_tx_r);
+-    
++
+     WriteReg(THR, c);
+   }
+ }
+diff --git a/kernel/virtio_disk.c b/kernel/virtio_disk.c
+index ae6c164..874b409 100644
+--- a/kernel/virtio_disk.c
++++ b/kernel/virtio_disk.c
+@@ -53,9 +53,9 @@ static struct disk {
+   // disk command headers.
+   // one-for-one with descriptors, for convenience.
+   struct virtio_blk_req ops[NUM];
+-  
++
+   struct spinlock vdisk_lock;
+-  
++
+ } disk;
+ 
+ void
+@@ -71,7 +71,7 @@ virtio_disk_init(void)
+      *R(VIRTIO_MMIO_VENDOR_ID) != 0x554d4551){
+     panic("could not find virtio disk");
+   }
+-  
++
+   // reset device
+   *R(VIRTIO_MMIO_STATUS) = status;
+ 
+diff --git a/kernel/vm.c b/kernel/vm.c
+index 5c31e87..6ea09aa 100644
+--- a/kernel/vm.c
++++ b/kernel/vm.c
+@@ -45,7 +45,7 @@ kvmmake(void)
+ 
+   // allocate and map a kernel stack for each process.
+   proc_mapstacks(kpgtbl);
+-  
++
+   return kpgtbl;
+ }
+ 
+@@ -154,7 +154,7 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
+ 
+   if(size == 0)
+     panic("mappages: size");
+-  
++
+   a = va;
+   last = va + size - PGSIZE;
+   for(;;){
+@@ -339,13 +339,44 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
+   return -1;
+ }
+ 
++int
++uvmmirror(pagetable_t old, pagetable_t new, uint64 sz)
++{
++  pte_t *pte;
++  uint64 pa, i;
++  uint flags;
++  // char *mem;
++
++  for(i = 0; i < sz; i += PGSIZE){
++    if((pte = walk(old, i, 0)) == 0)
++      panic("uvmcopy: pte should exist");
++    if((*pte & PTE_V) == 0)
++      panic("uvmcopy: page not present");
++    pa = PTE2PA(*pte);
++    flags = PTE_FLAGS(*pte);
++    // if((mem = kalloc()) == 0)
++    //   goto err;
++    // memmove(mem, (char*)pa, PGSIZE);
++    // if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
++    if(mappages(new, i, PGSIZE, (uint64)pa, flags) != 0){
++      // kfree(mem);
++      goto err;
++    }
++  }
++  return 0;
++
++ err:
++  uvmunmap(new, 0, i / PGSIZE, 1);
++  return -1;
++}
++
+ // mark a PTE invalid for user access.
+ // used by exec for the user stack guard page.
+ void
+ uvmclear(pagetable_t pagetable, uint64 va)
+ {
+   pte_t *pte;
+-  
++
+   pte = walk(pagetable, va, 0);
+   if(pte == 0)
+     panic("uvmclear");
+diff --git a/mkfs/mkfs.c b/mkfs/mkfs.c
+index 1ec326b..670c61f 100644
+--- a/mkfs/mkfs.c
++++ b/mkfs/mkfs.c
+@@ -134,7 +134,7 @@ main(int argc, char *argv[])
+       shortname = argv[i] + 5;
+     else
+       shortname = argv[i];
+-    
++
+     assert(index(shortname, '/') == 0);
+ 
+     if((fd = open(argv[i], 0)) < 0)
+diff --git a/user/grep.c b/user/grep.c
+index 6c33766..0f508d0 100644
+--- a/user/grep.c
++++ b/user/grep.c
+@@ -104,4 +104,3 @@ int matchstar(int c, char *re, char *text)
+   }while(*text!='\0' && (*text++==c || c=='.'));
+   return 0;
+ }
+-
+diff --git a/user/grind.c b/user/grind.c
+index 431ed19..93b5116 100644
+--- a/user/grind.c
++++ b/user/grind.c
+@@ -61,7 +61,7 @@ go(int which_child)
+     exit(1);
+   }
+   chdir("/");
+-  
++
+   while(1){
+     iters++;
+     if((iters % 500) == 0)
+@@ -298,7 +298,7 @@ iter()
+ {
+   unlink("a");
+   unlink("b");
+-  
++
+   int pid1 = fork();
+   if(pid1 < 0){
+     printf("grind: fork failed\n");
+diff --git a/user/threads.c b/user/threads.c
+new file mode 100644
+index 0000000..e55200f
+--- /dev/null
++++ b/user/threads.c
+@@ -0,0 +1,128 @@
++#include "kernel/types.h"
++#include "kernel/stat.h"
++#include "user/user.h"
++
++struct thread_spinlock{
++    int is_locked;
++};
++
++void
++thread_spin_init(struct thread_spinlock *lk)
++{
++  lk->is_locked=0;
++}
++
++void
++thread_spin_lock(struct thread_spinlock *lk)
++{
++  while(__sync_lock_test_and_set(&lk->is_locked, 1) != 0)
++    ;
++  __sync_synchronize();
++}
++
++void
++thread_spin_unlock(struct thread_spinlock *lk)
++{
++  __sync_synchronize();
++  __sync_lock_release(&lk->is_locked);
++}
++
++struct thread_mutex{
++    int is_locked;
++};
++
++void
++thread_mutex_init(struct thread_mutex *lk)
++{
++  lk->is_locked=0;
++}
++
++void
++thread_mutex_lock(struct thread_mutex *lk)
++{
++  while(__sync_lock_test_and_set(&lk->is_locked, 1) != 0)
++  {
++    sleep(1);
++  }
++  __sync_synchronize();
++}
++
++void
++thread_mutex_unlock(struct thread_mutex *lk)
++{
++  __sync_synchronize();
++  __sync_lock_release(&lk->is_locked);
++}
++
++
++
++
++struct balance {
++    char name[32];
++    int amount;
++};
++
++volatile int total_balance = 0;
++
++volatile unsigned int delay (unsigned int d) {
++   unsigned int i;
++   for (i = 0; i < d; i++) {
++       __asm volatile( "nop" ::: );
++   }
++
++   return i;
++}
++
++struct thread_spinlock lock;
++struct thread_mutex mlock;
++
++void do_work(void *arg){
++    int i;
++    int old;
++
++    struct balance *b = (struct balance*) arg;
++    thread_mutex_lock(&mlock);
++    printf( "Starting do_work: s:%s\n", b->name);
++    thread_mutex_unlock(&mlock);
++
++    for (i = 0; i < b->amount; i++) {
++        // lock and mlock will be implemented by you.
++         thread_spin_lock(&lock);
++        //  thread_mutex_lock(&mlock);
++         old = total_balance;
++         delay(100000);
++	    if(old != total_balance)  printf("we will miss an update. old: %d total_balance: %d\n", old, total_balance);
++         total_balance = old + 1;
++         thread_spin_unlock(&lock);
++        //  thread_mutex_unlock(&mlock);
++
++    }
++
++    printf( "Done s:%s\n", b->name);
++
++    thread_exit();
++    return;
++}
++
++int main(int argc, char *argv[]) {
++
++  struct balance b1 = {"b1", 3200};
++  struct balance b2 = {"b2", 2800};
++
++  void *s1, *s2;
++  int thread1, thread2, r1, r2;
++
++  s1 = malloc(4096); // 4096 is the PGSIZE defined in kernel/riscv.h
++  s2 = malloc(4096);
++
++  thread1 = thread_create(do_work, (void*)&b1, s1);
++  thread2 = thread_create(do_work, (void*)&b2, s2);
++
++  r1 = thread_join(thread1);
++  r2 = thread_join(thread2);
++
++  printf("Threads finished: (%d):%d, (%d):%d, shared balance:%d\n",
++      thread1, r1, thread2, r2, total_balance);
++
++  exit(0);
++}
+\ No newline at end of file
+diff --git a/user/user.h b/user/user.h
+index 04013ca..87593dc 100644
+--- a/user/user.h
++++ b/user/user.h
+@@ -39,3 +39,6 @@ void free(void*);
+ int atoi(const char*);
+ int memcmp(const void *, const void *, uint);
+ void *memcpy(void *, const void *, uint);
++int thread_create(void(*fcn)(void*), void *arg, void*stack);
++int thread_join(int thread_id);
++void thread_exit(void);
+diff --git a/user/user.ld b/user/user.ld
+index 0ca922b..20054dc 100644
+--- a/user/user.ld
++++ b/user/user.ld
+@@ -5,7 +5,7 @@ ENTRY( _main )
+ SECTIONS
+ {
+  . = 0x0;
+- 
++
+   .text : {
+     *(.text .text.*)
+   }
+diff --git a/user/usertests.c b/user/usertests.c
+index 55debe7..72baa9a 100644
+--- a/user/usertests.c
++++ b/user/usertests.c
+@@ -36,7 +36,7 @@ copyin(char *s)
+ 
+   for(int ai = 0; ai < 2; ai++){
+     uint64 addr = addrs[ai];
+-    
++
+     int fd = open("copyin1", O_CREATE|O_WRONLY);
+     if(fd < 0){
+       printf("open(copyin1) failed\n");
+@@ -49,13 +49,13 @@ copyin(char *s)
+     }
+     close(fd);
+     unlink("copyin1");
+-    
++
+     n = write(1, (char*)addr, 8192);
+     if(n > 0){
+       printf("write(1, %p, 8192) returned %d, not -1 or 0\n", (void*)addr, n);
+       exit(1);
+     }
+-    
++
+     int fds[2];
+     if(pipe(fds) < 0){
+       printf("pipe() failed\n");
+@@ -141,7 +141,7 @@ copyinstr2(char *s)
+   for(int i = 0; i < MAXPATH; i++)
+     b[i] = 'x';
+   b[MAXPATH] = '\0';
+-  
++
+   int ret = unlink(b);
+   if(ret != -1){
+     printf("unlink(%s) returned %d, not -1\n", b, ret);
+@@ -244,14 +244,14 @@ void
+ rwsbrk()
+ {
+   int fd, n;
+-  
++
+   uint64 a = (uint64) sbrk(8192);
+ 
+   if(a == 0xffffffffffffffffLL) {
+     printf("sbrk(rwsbrk) failed\n");
+     exit(1);
+   }
+-  
++
+   if ((uint64) sbrk(-8192) ==  0xffffffffffffffffLL) {
+     printf("sbrk(rwsbrk) shrink failed\n");
+     exit(1);
+@@ -281,7 +281,7 @@ rwsbrk()
+     exit(1);
+   }
+   close(fd);
+-  
++
+   exit(0);
+ }
+ 
+@@ -290,7 +290,7 @@ void
+ truncate1(char *s)
+ {
+   char buf[32];
+-  
++
+   unlink("truncfile");
+   int fd1 = open("truncfile", O_CREATE|O_WRONLY|O_TRUNC);
+   write(fd1, "abcd", 4);
+@@ -319,7 +319,7 @@ truncate1(char *s)
+     printf("%s: read %d bytes, wanted 0\n", s, n);
+     exit(1);
+   }
+-  
++
+   write(fd1, "abcdef", 6);
+ 
+   n = read(fd3, buf, sizeof(buf));
+@@ -372,7 +372,7 @@ truncate3(char *s)
+   int pid, xstatus;
+ 
+   close(open("truncfile", O_CREATE|O_TRUNC|O_WRONLY));
+-  
++
+   pid = fork();
+   if(pid < 0){
+     printf("%s: fork failed\n", s);
+@@ -418,7 +418,7 @@ truncate3(char *s)
+   unlink("truncfile");
+   exit(xstatus);
+ }
+-  
++
+ 
+ // does chdir() call iput(p->cwd) in a transaction?
+ void
+@@ -540,7 +540,7 @@ writetest(char *s)
+   int fd;
+   int i;
+   enum { N=100, SZ=10 };
+-  
++
+   fd = open("small", O_CREATE|O_RDWR);
+   if(fd < 0){
+     printf("%s: error: creat small failed!\n", s);
+@@ -738,7 +738,7 @@ pipe1(char *s)
+   int fds[2], pid, xstatus;
+   int seq, i, n, cc, total;
+   enum { N=5, SZ=1033 };
+-  
++
+   if(pipe(fds) != 0){
+     printf("%s: pipe() failed\n", s);
+     exit(1);
+@@ -791,7 +791,7 @@ void
+ killstatus(char *s)
+ {
+   int xst;
+-  
++
+   for(int i = 0; i < 100; i++){
+     int pid1 = fork();
+     if(pid1 < 0){
+@@ -962,7 +962,7 @@ void
+ forkfork(char *s)
+ {
+   enum { N=2 };
+-  
++
+   for(int i = 0; i < N; i++){
+     int pid = fork();
+     if(pid < 0){
+@@ -1119,7 +1119,7 @@ sharedfd(char *s)
+     if(xstatus != 0)
+       exit(xstatus);
+   }
+-  
++
+   close(fd);
+   fd = open("sharedfd", 0);
+   if(fd < 0){
+@@ -1154,7 +1154,7 @@ fourfiles(char *s)
+   char *names[] = { "f0", "f1", "f2", "f3" };
+   char *fname;
+   enum { N=12, NCHILD=4, SZ=500 };
+-  
++
+   for(pi = 0; pi < NCHILD; pi++){
+     fname = names[pi];
+     unlink(fname);
+@@ -2012,11 +2012,11 @@ sbrkbasic(char *s)
+       // it's OK if this fails.
+       exit(0);
+     }
+-    
++
+     for(b = a; b < a+TOOMUCH; b += 4096){
+       *b = 99;
+     }
+-    
++
+     // we should not get here! either sbrk(TOOMUCH)
+     // should have failed, or (with lazy allocation)
+     // a pagefault should have killed this process.
+@@ -2177,7 +2177,7 @@ sbrkfail(char *s)
+   char *c, *a;
+   int pids[10];
+   int pid;
+- 
++
+   if(pipe(fds) != 0){
+     printf("%s: pipe() failed\n", s);
+     exit(1);
+@@ -2208,7 +2208,7 @@ sbrkfail(char *s)
+     exit(1);
+   }
+ 
+-  // test running fork with the above allocated page 
++  // test running fork with the above allocated page
+   pid = fork();
+   if(pid < 0){
+     printf("%s: fork failed\n", s);
+@@ -2234,7 +2234,7 @@ sbrkfail(char *s)
+     exit(1);
+ }
+ 
+-  
++
+ // test reads/writes from/to allocated memory
+ void
+ sbrkarg(char *s)
+@@ -2260,7 +2260,7 @@ sbrkarg(char *s)
+   if(pipe((int *) a) != 0){
+     printf("%s: pipe() failed\n", s);
+     exit(1);
+-  } 
++  }
+ }
+ 
+ void
+@@ -2318,7 +2318,7 @@ bigargtest(char *s)
+     printf("%s: bigargtest: fork failed\n", s);
+     exit(1);
+   }
+-  
++
+   wait(&xstatus);
+   if(xstatus != 0)
+     exit(xstatus);
+@@ -2402,7 +2402,7 @@ stacktest(char *s)
+ {
+   int pid;
+   int xstatus;
+-  
++
+   pid = fork();
+   if(pid == 0) {
+     char *sp = (char *) r_sp();
+@@ -2427,7 +2427,7 @@ textwrite(char *s)
+ {
+   int pid;
+   int xstatus;
+-  
++
+   pid = fork();
+   if(pid == 0) {
+     volatile int *addr = (int *) 0;
+@@ -2567,7 +2567,7 @@ badarg(char *s)
+     argv[1] = 0;
+     exec("echo", argv);
+   }
+-  
++
+   exit(0);
+ }
+ 
+@@ -2691,7 +2691,7 @@ manywrites(char *s)
+ {
+   int nchildren = 4;
+   int howmany = 30; // increase to look for deadlock
+-  
++
+   for(int ci = 0; ci < nchildren; ci++){
+     int pid = fork();
+     if(pid < 0){
+@@ -2705,7 +2705,7 @@ manywrites(char *s)
+       name[1] = 'a' + ci;
+       name[2] = '\0';
+       unlink(name);
+-      
++
+       for(int iters = 0; iters < howmany; iters++){
+         for(int i = 0; i < ci+1; i++){
+           int fd = open(name, O_CREATE | O_RDWR);
+@@ -2747,7 +2747,7 @@ void
+ badwrite(char *s)
+ {
+   int assumed_free = 600;
+-  
++
+   unlink("junk");
+   for(int i = 0; i < assumed_free; i++){
+     int fd = open("junk", O_CREATE|O_WRONLY);
+@@ -2799,7 +2799,7 @@ execout(char *s)
+       // progress.
+       for(int i = 0; i < avail; i++)
+         sbrk(-4096);
+-      
++
+       close(1);
+       char *args[] = { "echo", "x", 0 };
+       exec("echo", args);
+@@ -2820,7 +2820,7 @@ diskfull(char *s)
+   int done = 0;
+ 
+   unlink("diskfulldir");
+-  
++
+   for(fi = 0; done == 0 && '0' + fi < 0177; fi++){
+     char name[32];
+     name[0] = 'b';
+@@ -2931,7 +2931,7 @@ struct test slowtests[] = {
+   {execout, "execout"},
+   {diskfull, "diskfull"},
+   {outofinodes, "outofinodes"},
+-    
++
+   { 0, 0},
+ };
+ 
+@@ -2956,7 +2956,7 @@ run(void f(char *), char *s) {
+     exit(0);
+   } else {
+     wait(&xstatus);
+-    if(xstatus != 0) 
++    if(xstatus != 0)
+       printf("FAILED\n");
+     else
+       printf("OK\n");
+@@ -2995,7 +2995,7 @@ countfree()
+     printf("pipe() failed in countfree()\n");
+     exit(1);
+   }
+-  
++
+   int pid = fork();
+ 
+   if(pid < 0){
+@@ -3005,7 +3005,7 @@ countfree()
+ 
+   if(pid == 0){
+     close(fds[0]);
+-    
++
+     while(1){
+       uint64 a = (uint64) sbrk(4096);
+       if(a == 0xffffffffffffffff){
+@@ -3042,7 +3042,7 @@ countfree()
+ 
+   close(fds[0]);
+   wait((int*)0);
+-  
++
+   return n;
+ }
+ 
+diff --git a/user/usys.pl b/user/usys.pl
+index 01e426e..d01d01b 100755
+--- a/user/usys.pl
++++ b/user/usys.pl
+@@ -14,7 +14,7 @@ sub entry {
+     print " ecall\n";
+     print " ret\n";
+ }
+-	
++
+ entry("fork");
+ entry("exit");
+ entry("wait");
+@@ -36,3 +36,6 @@ entry("getpid");
+ entry("sbrk");
+ entry("sleep");
+ entry("uptime");
++entry("thread_create");
++entry("thread_join");
++entry("thread_exit")
